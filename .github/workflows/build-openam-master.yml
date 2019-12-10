@@ -1,0 +1,170 @@
+name: CI OpenAM
+
+on:
+  schedule:
+    ## Runs at 19:00 UTC (04:00 JST) every day
+    - cron: '0 19 * * *'
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    strategy:
+      matrix:
+        java: [ '8', '11' ]
+
+    env:
+      RELEASE_NAME:         openam-master-jdk${{ matrix.java }}
+      RELEASE_API_URL:      https://api.github.com/repos/${{ github.repository }}/releases
+      GIT_ORIGIN:           https://github.com/openam-jp
+      GIT_MAIN_REPO:        openam
+      GIT_BRANCH:           master
+      ARTIFACT_DIR:         /tmp/target
+      REPO_NAMES: |
+                            forgerock-parent
+                            forgerock-bom
+                            forgerock-build-tools
+                            forgerock-i18n-framework
+                            forgerock-guice
+                            forgerock-guava
+                            forgerock-ui
+                            forgerock-commons
+                            forgerock-persistit
+                            forgerock-bloomfilter
+                            opendj-sdk
+                            opendj
+                            openam
+
+    steps:
+    - name: Cleanup previous Release
+      run: |
+
+        echo "RELEASE_NAME: ${RELEASE_NAME}"
+        echo "RELEASE_API_URL: ${RELEASE_API_URL}"
+
+        curl -sS \
+            --url ${RELEASE_API_URL} \
+            --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
+
+        DELETE_LIST=$(
+          curl -sS \
+              --url ${RELEASE_API_URL} \
+              --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+            | jq -r -c '.[] | [.tag_name, .id] | @csv' \
+            | grep "${RELEASE_NAME}" \
+            | cut --delimiter=, --fields=2
+        )
+        echo "DELETE_LIST: ${DELETE_LIST}"
+
+        for DELETE_ID in ${DELETE_LIST}; do
+          ## Delete a release by id
+          curl -sS \
+            --request DELETE \
+            --url ${RELEASE_API_URL}/${DELETE_ID} \
+            --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
+        done
+
+
+    - name: Create the Release
+      id: create_release
+      run: |
+
+        RELEASE_JSON="{
+          \"tag_name\": \"${RELEASE_NAME}\",
+          \"target_commitish\": \"\",
+          \"name\": \"${RELEASE_NAME}\",
+          \"body\": \"\",
+          \"draft\": false,
+          \"prerelease\": true
+        }"
+
+        RELEASE_RESULT=$(
+          curl -sS \
+            --request POST \
+            --url ${RELEASE_API_URL} \
+            --header "authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            --header "content-type: application/json" \
+            --data "${RELEASE_JSON}"
+        )
+        echo "RELEASE_RESULT: ${RELEASE_RESULT}"
+
+        RELEASE_ID=$(echo "${RELEASE_RESULT}" | jq -r '.id')
+        echo "RELEASE_ID: ${RELEASE_ID}"
+
+
+        ## Export RELEASE_ID for `Upload` step
+        echo "##[set-output name=id;]${RELEASE_ID}"
+
+
+    - name: Set up JDK ${{ matrix.java }}
+      uses: actions/setup-java@v1
+      with:
+        java-version: ${{ matrix.java }}
+        architecture: x64
+
+
+    - name: Clone the source code
+      run: |
+
+        echo "REPO_NAMES: ${REPO_NAMES}"
+
+        for REPO in ${REPO_NAMES}; do
+          git clone \
+            ${GIT_ORIGIN}/${REPO} \
+            -b master
+        done
+        echo "Source codes: $(ls)"
+
+
+    - name: Build in order
+      run: |
+
+        mkdir -p ${ARTIFACT_DIR}
+        LOG_FILE=${ARTIFACT_DIR}/${RELEASE_NAME}.build.log
+
+        BASE_DIR=$(pwd)
+        for REPO in ${REPO_NAMES}; do
+          cd ${BASE_DIR}/${REPO}
+          mvn clean install \
+              -DskipTests=true \
+              -Dmaven.test.failure.ignore=true \
+            | tee -a ${LOG_FILE}
+        done
+
+
+    - name: Collect artifacts
+      run: |
+
+        find ./openam/openam-server -name *.war \
+          | xargs -I% mv % ${ARTIFACT_DIR}/${RELEASE_NAME}.openam.war
+
+        find ./openam/openam-tools -name openam-configurator-tool*.jar \
+          | xargs -I% mv % ${ARTIFACT_DIR}/${RELEASE_NAME}.openam-configurator-tool.jar
+
+
+    - name: Upload artifacts
+      run: |
+
+        echo "steps.create_release.outputs.id: ${{ steps.create_release.outputs.id }}"
+        UPLOAD_URL_PREFIX=https://uploads.github.com/repos/${{ github.repository }}/releases/${{ steps.create_release.outputs.id }}/assets
+
+        cd ${ARTIFACT_DIR}
+
+        ARTIFACT_NAMES=$(ls .)
+        echo "ARTIFACT_NAMES: ${ARTIFACT_NAMES}"
+
+        for ARTIFACT in ${ARTIFACT_NAMES}; do
+
+          UPLOAD_URL=${UPLOAD_URL_PREFIX}?name=${ARTIFACT}
+          echo "UPLOAD_URL: ${UPLOAD_URL}"
+
+          curl -sS \
+            --request PUT \
+            --url "${UPLOAD_URL}" \
+            --header "authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            --header "content-type: application/octet-stream" \
+            --data-binary @${ARTIFACT}
+
+        done
