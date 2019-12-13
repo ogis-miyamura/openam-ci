@@ -18,6 +18,7 @@ jobs:
     env:
       RELEASE_NAME:         openam-master-jdk${{ matrix.java }}
       RELEASE_API_URL:      https://api.github.com/repos/${{ github.repository }}/releases
+      RELEASE_BODY:         "Please read the [license](https://github.com/openam-jp/openam/blob/master/README.md#license) before using these artifacts."
       GIT_ORIGIN:           https://github.com/openam-jp
       GIT_MAIN_REPO:        openam
       GIT_BRANCH:           master
@@ -38,65 +39,6 @@ jobs:
                             openam
 
     steps:
-    - name: Cleanup previous Release
-      run: |
-
-        echo "RELEASE_NAME: ${RELEASE_NAME}"
-        echo "RELEASE_API_URL: ${RELEASE_API_URL}"
-
-        curl -sS \
-            --url ${RELEASE_API_URL} \
-            --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
-
-        DELETE_LIST=$(
-          curl -sS \
-              --url ${RELEASE_API_URL} \
-              --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
-            | jq -r -c '.[] | [.tag_name, .id] | @csv' \
-            | grep "${RELEASE_NAME}" \
-            | cut --delimiter=, --fields=2
-        )
-        echo "DELETE_LIST: ${DELETE_LIST}"
-
-        for DELETE_ID in ${DELETE_LIST}; do
-          ## Delete a release by id
-          curl -sS \
-            --request DELETE \
-            --url ${RELEASE_API_URL}/${DELETE_ID} \
-            --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
-        done
-
-
-    - name: Create the Release
-      id: create_release
-      run: |
-
-        RELEASE_JSON="{
-          \"tag_name\": \"${RELEASE_NAME}\",
-          \"target_commitish\": \"\",
-          \"name\": \"${RELEASE_NAME}\",
-          \"body\": \"\",
-          \"draft\": false,
-          \"prerelease\": true
-        }"
-
-        RELEASE_RESULT=$(
-          curl -sS \
-            --request POST \
-            --url ${RELEASE_API_URL} \
-            --header "authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            --header "content-type: application/json" \
-            --data "${RELEASE_JSON}"
-        )
-        echo "RELEASE_RESULT: ${RELEASE_RESULT}"
-
-        RELEASE_ID=$(echo "${RELEASE_RESULT}" | jq -r '.id')
-        echo "RELEASE_ID: ${RELEASE_ID}"
-
-
-        ## Export RELEASE_ID for `Upload` step
-        echo "##[set-output name=id;]${RELEASE_ID}"
-
 
     - name: Set up JDK ${{ matrix.java }}
       uses: actions/setup-java@v1
@@ -142,6 +84,66 @@ jobs:
 
         find ./openam/openam-tools -name openam-configurator-tool*.jar \
           | xargs -I% mv % ${ARTIFACT_DIR}/${RELEASE_NAME}.openam-configurator-tool.jar
+
+
+    - name: Cleanup previous Release
+      run: |
+
+        echo "RELEASE_NAME: ${RELEASE_NAME}"
+        echo "RELEASE_API_URL: ${RELEASE_API_URL}"
+
+        curl -sS \
+            --url ${RELEASE_API_URL} \
+            --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
+
+        DELETE_LIST=$(
+          curl -sS \
+              --url ${RELEASE_API_URL} \
+              --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+            | jq -r -c '.[] | [.tag_name, .id] | @csv' \
+            | grep "${RELEASE_NAME}" \
+            | cut --delimiter=, --fields=2
+        )
+        echo "DELETE_LIST: ${DELETE_LIST}"
+
+        for DELETE_ID in ${DELETE_LIST}; do
+          ## Delete a release by id
+          curl -sS \
+            --request DELETE \
+            --url ${RELEASE_API_URL}/${DELETE_ID} \
+            --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
+        done
+
+
+    - name: Create the Release
+      id: create_release
+      run: |
+
+        RELEASE_JSON="{
+          \"tag_name\": \"${RELEASE_NAME}\",
+          \"target_commitish\": \"\",
+          \"name\": \"${RELEASE_NAME}\",
+          \"body\": \"${RELEASE_BODY}\",
+          \"draft\": false,
+          \"prerelease\": true
+        }"
+
+        RELEASE_RESULT=$(
+          curl -sS \
+            --request POST \
+            --url ${RELEASE_API_URL} \
+            --header "authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            --header "content-type: application/json" \
+            --data "${RELEASE_JSON}"
+        )
+        echo "RELEASE_RESULT: ${RELEASE_RESULT}"
+
+        RELEASE_ID=$(echo "${RELEASE_RESULT}" | jq -r '.id')
+        echo "RELEASE_ID: ${RELEASE_ID}"
+
+
+        ## Export RELEASE_ID for `Upload` step
+        echo "##[set-output name=id;]${RELEASE_ID}"
 
 
     - name: Upload artifacts
